@@ -177,6 +177,93 @@ app.post('/sheet/add-meta', async (req, res) => {
   }
 });
 
+// เปลี่ยนชื่อชีต
+app.post('/sheet/rename', async (req, res) => {
+  try {
+    const { oldName, newName } = req.body;
+    if (!oldName || !newName || oldName === newName) {
+      return res.status(400).json({ error: 'Invalid sheet name' });
+    }
+    const client = await auth.getClient();
+    const sheets = google.sheets({ version: 'v4', auth: client });
+    // หา sheetId จากชื่อชีต
+    const meta = await sheets.spreadsheets.get({ spreadsheetId: SPREADSHEET_ID });
+    const sheetObj = (meta.data.sheets || []).find(s => s.properties.title === oldName);
+    if (!sheetObj) return res.status(404).json({ error: 'Sheet not found' });
+    const sheetId = sheetObj.properties.sheetId;
+    // เปลี่ยนชื่อชีต
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId: SPREADSHEET_ID,
+      requestBody: {
+        requests: [
+          {
+            updateSheetProperties: {
+              properties: { sheetId, title: newName },
+              fields: 'title',
+            },
+          },
+        ],
+      },
+    });
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// เพิ่ม endpoint สำหรับบันทึกรายรับ (คอลัมน์ H-L)
+app.post('/sheet/append-income', async (req, res) => {
+  try {
+    const { date, item, category, amount, note } = req.body;
+    // กำหนดชื่อชีตเป้าหมาย (ใช้ชีตเดียวกับรายจ่าย)
+    const sheet = req.body.sheet || 'ชื่อชีตเป้าหมาย'; // ปรับชื่อชีตถ้าต้องการ
+    const client = await auth.getClient();
+    const sheetsApi = google.sheets({ version: 'v4', auth: client });
+    // เตรียมข้อมูลสำหรับคอลัมน์ H-L (7-11)
+    // [H, I, J, K, L] = [date, item, category, amount, note]
+    const newRow = [date, item, category, amount, note];
+    // หาแถวสุดท้ายที่มีข้อมูลในคอลัมน์ H
+    const colHRange = `${sheet}!H:H`;
+    const colHRes = await sheetsApi.spreadsheets.values.get({
+      spreadsheetId: SPREADSHEET_ID,
+      range: colHRange,
+    });
+    const lastRow = (colHRes.data.values || []).length + 1; // +1 เพราะ header อาจอยู่แถว 1
+    // ใส่ข้อมูลลง H-L ของแถวถัดไป
+    const targetRange = `${sheet}!H${lastRow}:L${lastRow}`;
+    await sheetsApi.spreadsheets.values.update({
+      spreadsheetId: SPREADSHEET_ID,
+      range: targetRange,
+      valueInputOption: 'USER_ENTERED',
+      requestBody: { values: [newRow] },
+    });
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// อัปเดตชื่อชีตล่าสุดใน AppStorage!A2
+app.post('/sheet/update-last-sheet', async (req, res) => {
+  try {
+    const { newSheetName } = req.body;
+    if (!newSheetName || !newSheetName.trim()) {
+      return res.status(400).json({ error: 'Invalid sheet name' });
+    }
+    const client = await auth.getClient();
+    const sheets = google.sheets({ version: 'v4', auth: client });
+    await sheets.spreadsheets.values.update({
+      spreadsheetId: SPREADSHEET_ID,
+      range: `${SHEET_NAME}!A2`,
+      valueInputOption: 'USER_ENTERED',
+      requestBody: { values: [[newSheetName]] },
+    });
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 const PORT = 3000;
 app.listen(PORT, () => {
   console.log(`Backend API listening on port ${PORT}`);
