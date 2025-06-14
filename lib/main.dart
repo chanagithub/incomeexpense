@@ -4,6 +4,113 @@ import 'package:http/http.dart' as http;
 import 'package:gsheets/gsheets.dart';
 import 'dart:io';
 import 'package:flutter/services.dart';
+import 'income_form.dart';
+import 'expense_form.dart';
+
+class HomePage extends StatelessWidget {
+  const HomePage({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            ElevatedButton(
+              onPressed: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => const IncomeFormPage()),
+                );
+              },
+              child: const Text('รายรับ'),
+            ),
+            const SizedBox(height: 24),
+            ElevatedButton(
+              onPressed: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => const ExpenseFormPage()),
+                );
+              },
+              child: const Text('รายจ่าย'),
+            ),
+            const SizedBox(height: 24),
+            ElevatedButton(
+              onPressed: () async {
+                // ดึงชื่อชีตล่าสุดจาก AppStorage!A2 ก่อน
+                String? oldName;
+                final getLastSheet = await http.get(Uri.parse('http://localhost:3000/sheet/a2'));
+                if (getLastSheet.statusCode == 200) {
+                  final parsed = jsonDecode(getLastSheet.body);
+                  oldName = parsed['value'] ?? '';
+                }
+                showDialog(
+                  context: context,
+                  builder: (context) {
+                    final TextEditingController _sheetNameController = TextEditingController();
+                    return AlertDialog(
+                      title: const Text('เปลี่ยนชื่อชีต'),
+                      content: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('ชื่อชีตปัจจุบัน: ${oldName ?? "-"}'),
+                          const SizedBox(height: 12),
+                          TextField(
+                            controller: _sheetNameController,
+                            decoration: const InputDecoration(labelText: 'ชื่อชีตใหม่'),
+                          ),
+                        ],
+                      ),
+                      actions: [
+                        TextButton(
+                          onPressed: () => Navigator.of(context).pop(),
+                          child: const Text('ยกเลิก'),
+                        ),
+                        ElevatedButton(
+                          onPressed: () async {
+                            final newName = _sheetNameController.text.trim();
+                            if (newName.isNotEmpty && oldName != null && oldName.isNotEmpty && oldName != newName) {
+                              final url = Uri.parse('http://localhost:3000/sheet/rename');
+                              final response = await http.post(url,
+                                headers: {'Content-Type': 'application/json'},
+                                body: jsonEncode({'oldName': oldName, 'newName': newName}),
+                              );
+                              if (response.statusCode == 200) {
+                                // update AppStorage!A2
+                                final updateUrl = Uri.parse('http://localhost:3000/sheet/update-last-sheet');
+                                await http.post(updateUrl,
+                                  headers: {'Content-Type': 'application/json'},
+                                  body: jsonEncode({'newSheetName': newName}),
+                                );
+                                Navigator.of(context).pop();
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(content: Text('เปลี่ยนชื่อชีตสำเร็จ: $newName')),
+                                );
+                              } else {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(content: Text('เปลี่ยนชื่อชีตไม่สำเร็จ: ${response.body}')),
+                                );
+                              }
+                            } else {
+                              Navigator.of(context).pop();
+                            }
+                          },
+                          child: const Text('บันทึก'),
+                        ),
+                      ],
+                    );
+                  },
+                );
+              },
+              child: const Text('เปลี่ยนชื่อชีต'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
 
 void main() {
   runApp(const MyApp());
@@ -20,7 +127,7 @@ class MyApp extends StatelessWidget {
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.teal),
         useMaterial3: true,
       ),
-      home: const MyHomePage(),
+      home: const HomePage(),
     );
   }
 }
@@ -233,6 +340,8 @@ class _MyHomePageState extends State<MyHomePage> {
     }
   }
 
+  bool _showSheetEditBox = false;
+
   @override
   void initState() {
     super.initState();
@@ -420,6 +529,70 @@ class _MyHomePageState extends State<MyHomePage> {
                         maxLines: 2,
                       ),
                       const SizedBox(height: 24),
+                      // ปุ่มเปลี่ยนชื่อชีต และ textbox สำหรับแก้ไขชื่อ (แสดงเมื่อกดปุ่ม)
+                      Row(
+                        children: [
+                          if (!_showSheetEditBox)
+                            ElevatedButton(
+                              onPressed: () {
+                                setState(() {
+                                  _showSheetEditBox = true;
+                                });
+                              },
+                              child: const Text('เปลี่ยนชื่อชีต'),
+                            ),
+                          if (_showSheetEditBox) ...[
+                            Expanded(
+                              child: TextFormField(
+                                controller: _sheetController,
+                                decoration: const InputDecoration(
+                                  labelText: 'ชื่อชีตใหม่',
+                                  prefixIcon: Icon(Icons.edit_document),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            ElevatedButton(
+                              onPressed: () async {
+                                final oldName = _selectedSheetName;
+                                final newName = _sheetController.text.trim();
+                                if (oldName != null && newName.isNotEmpty && oldName != newName) {
+                                  final url = Uri.parse('http://localhost:3000/sheet/rename');
+                                  final response = await http.post(url,
+                                    headers: {'Content-Type': 'application/json'},
+                                    body: jsonEncode({'oldName': oldName, 'newName': newName}),
+                                  );
+                                  if (response.statusCode == 200) {
+                                    // อัปเดตชื่อชีตล่าสุดใน AppStorage!A2
+                                    final updateUrl = Uri.parse('http://localhost:3000/sheet/update-last-sheet');
+                                    await http.post(updateUrl,
+                                      headers: {'Content-Type': 'application/json'},
+                                      body: jsonEncode({'newSheetName': newName}),
+                                    );
+                                    setState(() {
+                                      _showSheetEditBox = false;
+                                      _selectedSheetName = newName;
+                                      _sheetController.text = newName;
+                                    });
+                                    await fetchSheetNamesFromBackend(); // refresh รายชื่อชีต
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(content: Text('เปลี่ยนชื่อชีตสำเร็จ: $newName')),
+                                    );
+                                  } else {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(content: Text('เปลี่ยนชื่อชีตไม่สำเร็จ: ${response.body}')),
+                                    );
+                                  }
+                                } else {
+                                  setState(() { _showSheetEditBox = false; });
+                                }
+                              },
+                              child: const Text('บันทึก'),
+                            ),
+                          ],
+                        ],
+                      ),
+                      const SizedBox(height: 16),
                       ElevatedButton.icon(
                         onPressed: _submitToGoogleSheet,
                         icon: const Icon(Icons.send),
